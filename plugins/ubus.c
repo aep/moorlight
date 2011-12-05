@@ -40,8 +40,9 @@ int meubus_register(struct dc *dc)
 {
     if (!service)
         return 0;
+
     const char *path = "/task/";
-    char *nam = malloc(strlen(path) + strlen(dc->name) + 14);
+    char *nam = calloc(strlen(path) + strlen(dc->name) + 14, sizeof(char));
     strcpy(nam, path);
     strcat(nam, "/");
     strcat(nam, dc->name);
@@ -51,21 +52,26 @@ int meubus_register(struct dc *dc)
     strcat(nam, "restart");
     dc->bus_restart   = ubus_create(nam);
     nam[e] = 0;
+
     strcat(nam, "start");
     dc->bus_start   = ubus_create(nam);
     nam[e] = 0;
+
     strcat(nam, "stop");
     dc->bus_stop    = ubus_create(nam);
     nam[e] = 0;
+
     strcat(nam, "status");
     dc->bus_status  = ubus_create(nam);
     nam[e] = 0;
+
     strcat(nam, "pid");
     FILE *pidfile = fopen(nam, "w");
-    fprintf(pidfile, "%i\n", dc->pid);
+    fprintf(pidfile, "\n");
     fclose(pidfile);
+    nam[e] = 0;
 
-    free(nam);
+    dc->servicepath = nam;
     return 0;
 }
 int meubus_unregister(struct dc *dc)
@@ -78,21 +84,16 @@ int meubus_unregister(struct dc *dc)
     ubus_destroy(dc->bus_status);
     ubus_destroy(dc->bus_stop);
 
-    const char *path = "/task/";
-    char *nam = malloc(strlen(path) + strlen(dc->name) + 14);
-    strcpy(nam, path);
-    strcat(nam, "/");
-    strcat(nam, dc->name);
-    strcat(nam, "/");
+    char *nam = dc->servicepath;
     int e = strlen(nam);
 
     strcat(nam, "pid");
     unlink(nam);
-
     nam[e] = 0;
-    rmdir(nam);
 
+    rmdir(nam);
     free(nam);
+    dc->servicepath = 0;
     return 0;
 }
 
@@ -112,6 +113,22 @@ int meubus_prepare_parent(struct dc *dc)
         return 0;
     const char *msg = "started\n";
     ubus_broadcast(dc->bus_status, msg, strlen(msg));
+
+    char *nam = dc->servicepath;
+    int e = strlen(nam);
+
+    strcat(nam, "pid");
+    FILE *pidfile = fopen(nam, "w");
+    fprintf(pidfile, "%i\n", dc->pid);
+    fclose(pidfile);
+    nam[e] = 0;
+
+    char procp[256];
+    snprintf(procp, 256, "/proc/%i", dc->pid);
+    strcat(nam, "proc");
+    symlink(procp, nam);
+    nam[e] = 0;
+
     return 0;
 }
 
@@ -119,8 +136,21 @@ int meubus_terminate(struct dc *dc)
 {
     if (!service)
         return 0;
-    const char *msg = "terminated\n";
+    const char *msg = "stopped\n";
     ubus_broadcast(dc->bus_status, msg, strlen(msg));
+
+
+    char *nam = dc->servicepath;
+    int e = strlen(nam);
+
+    strcat(nam, "pid");
+    unlink(nam);
+    nam[e] = 0;
+
+    strcat(nam, "proc");
+    unlink(nam);
+    nam[e] = 0;
+
     return 0;
 }
 
@@ -166,7 +196,6 @@ int meubus_activate(dc_list *dc, fd_set *rfds)
         } else {
             buff[len] = 0;
             char *line = strtok(buff, "\n\r");
-            fprintf(stderr, ")))))%s(((\n", line);
 
             char *command = strtok(line, "\t");
             if (strcmp(command, "run") == 0) {
@@ -204,9 +233,31 @@ int meubus_activate(dc_list *dc, fd_set *rfds)
     }
     struct dc *dci = dcl;
     while (dci) {
+        int len = 0;
+        char buff [1024];
+        ubus_chan_t * chan = 0;
+
+        ubus_activate_all (dci->bus_restart, rfds, 0);
+        if (ubus_ready_chan(dci->bus_restart)) {
+            log_info("ubus", "bus command: restart %s", dc->name);
+            dc_restart(dci);
+        }
         ubus_activate_all (dci->bus_restart, rfds, 1);
+
+        ubus_activate_all (dci->bus_start, rfds, 0);
+        if (ubus_ready_chan(dci->bus_start)) {
+            log_info("ubus", "bus command: start %s", dc->name);
+            dc_start(dci);
+        }
         ubus_activate_all (dci->bus_start, rfds, 1);
+
+        ubus_activate_all (dci->bus_stop, rfds, 0);
+        if (ubus_ready_chan(dci->bus_stop)) {
+            log_info("ubus", "bus command: stop %s", dc->name);
+            dc_terminate(dci);
+        }
         ubus_activate_all (dci->bus_stop, rfds, 1);
+
         ubus_activate_all (dci->bus_status, rfds, 1);
 
         dci = dci->next;

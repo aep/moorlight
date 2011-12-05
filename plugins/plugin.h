@@ -10,6 +10,8 @@ struct dc
     pid_t pid;
     int proccom[2];
     int running;
+
+    char *servicepath;
     ubus_t *bus_restart;
     ubus_t *bus_start;
     ubus_t *bus_stop;

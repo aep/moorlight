@@ -31,8 +31,8 @@
 #else
 #define PLUGIN_RUN(fun, call) \
     process_ ## fun call; \
-    cgroup_ ## fun call; \
     meubus_ ## fun call; \
+    cgroup_ ## fun call; \
 //    sysv_ ## fun call; \
 
 #endif
@@ -57,6 +57,9 @@ void dc_start_parent(struct dc *dc)
 
 int dc_start(struct dc *dc)
 {
+    if (dc->running != 0 )
+        return 0;
+    dc->running = 1;
     PLUGIN_RUN(prepare, (dc));
     assume(dc->pid = fork());
     if (dc->pid == 0) {
@@ -69,7 +72,10 @@ int dc_start(struct dc *dc)
 
 int dc_terminate(struct dc *dc)
 {
+    if (dc->running == 0 )
+        return 0;
     PLUGIN_RUN(terminate, (dc));
+    dc->running = 0;
     return 0;
 }
 
@@ -120,6 +126,7 @@ int main(int argc, char **argv)
 
     //test
     struct dc dc;
+    memset(&dc, 0, sizeof(struct dc));
     dc.name = "test";
     dc.cmd =  "/home/aep/proj/moorlight/test/testdaemon.sh";
     dc.next = 0;

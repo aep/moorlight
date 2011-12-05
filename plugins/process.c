@@ -53,7 +53,6 @@ int process_unregister(struct dc *dc)
 
 int process_prepare(struct dc *dc)
 {
-    dc->running = 1;
     assume(pipe(dc->proccom));
     fcntl(dc->proccom[0],F_SETFL,fcntl(dc->proccom[0],F_GETFL)|O_NONBLOCK);
     fcntl(dc->proccom[1],F_SETFL,fcntl(dc->proccom[1],F_GETFL)|O_NONBLOCK);
@@ -65,8 +64,6 @@ int process_prepare_child(struct dc *dc)
     // become session leader
     setsid();
 
-    close(dc->proccom[0]);
-    write(dc->proccom[1], "S", 1);
     return 0;
 }
 
@@ -75,21 +72,39 @@ int process_prepare_parent(struct dc *dc)
     close(dc->proccom[1]);
     log_debug("process", "[%s] has pid %i", dc->name, dc->pid);
     char buff;
-    int ret = read(dc->proccom[0], &buff, 1);
+
+    int ret;
+    for (;;) {
+        ret = read(dc->proccom[0], &buff, 1);
+        if (ret < 1) {
+            if (errno == EAGAIN)
+                continue;
+            else
+                assume(ret);
+        } else {
+            break;
+        }
+    }
     log_debug("process", "[%s] pipe sycned %i", dc->name, ret);
     return 0;
 }
 
 int process_terminate(struct dc *dc)
 {
+    if (!dc->pid)
+        return 2;
     log_debug("process", "[%s] terminating session %i", dc->name, dc->pid);
 
     //nuke the entire process group
     kill(-dc->pid, SIGTERM);
 
     //TODO: wait for all of them do die or is waiting for the leader sufficient?
+    //TODO: add real wait mechanism with timeouts
     int status;
+
+    log_debug("process", "[%s] waiting for leader %i to die", dc->name, dc->pid);
     waitpid(dc->pid, &status, 0);
+    log_debug("process", "[%s] leader %i finally died", dc->name, dc->pid);
 
     return 0;
 }
@@ -109,6 +124,8 @@ int process_exec(struct dc *dc)
         tk = strtok(NULL,  " \t");
     }
     argv[i] = 0;
+    close(dc->proccom[0]);
+    write(dc->proccom[1], "S", 1);
     execv(*argv, argv);
     return 0;
 }
@@ -126,10 +143,13 @@ static void update(dc_list *dci)
 {
     while (dci) {
         struct dc *dc = dci;
+        if (dc->running == 0) {
+            dci = dci->next;
+            continue;
+        }
         if (waitpid(dc->pid, &(dc->state), WNOHANG)) {
             if (WIFEXITED(dc->state) || WIFSIGNALED(dc->state) ) {
                 log_info("process", "[%s] leader died", dc->name);
-                dc->running = 2;
                 dc_restart(dc);
             }
         }
