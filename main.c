@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <unistd.h>
+#include <assert.h>
 
 #include "logger.h"
 #include "plugins/plugin.h"
@@ -42,65 +43,80 @@
 static struct dc_plugin *dc_plugins = 0;
 #endif
 
-void dc_start_child(struct dc *dc)
+void dc_start_child(struct task *task)
 {
-    PLUGIN_RUN(prepare_child, (dc));
-    PLUGIN_RUN(exec, (dc));
+    PLUGIN_RUN(prepare_child, (task));
+    PLUGIN_RUN(exec, (task));
     // if we're here, no plugin could do an exec
-    log_error("dc", "no plugin can start task %s", dc->name);
+    log_error("dc", "no plugin can start task %s", task->name);
 }
 
-void dc_start_parent(struct dc *dc)
+void dc_start_parent(struct task *task)
 {
-    PLUGIN_RUN(prepare_parent, (dc));
+    PLUGIN_RUN(prepare_parent, (task));
 }
 
-int dc_start(struct dc *dc)
+int dc_start(struct task *task)
 {
-    if (dc->running != 0 )
+    if (task->running != 0 )
         return 0;
-    dc->running = 1;
-    PLUGIN_RUN(prepare, (dc));
-    assume(dc->pid = fork());
-    if (dc->pid == 0) {
-        dc_start_child(dc);
-    } else if (dc->pid > 0){
-        dc_start_parent(dc);
+    task->running = 1;
+    PLUGIN_RUN(prepare, (task));
+    assume(task->pid = fork());
+    if (task->pid == 0) {
+        dc_start_child(task);
+    } else if (task->pid > 0){
+        dc_start_parent(task);
     }
 }
-
-
-int dc_terminate(struct dc *dc)
+int dc_stop(struct task *task)
 {
-    if (dc->running == 0 )
+    if (task->running == 0 )
         return 0;
-    PLUGIN_RUN(terminate, (dc));
-    dc->running = 0;
+    PLUGIN_RUN(stop, (task));
+    task->running = 0;
     return 0;
 }
 
-
-int dc_restart(struct dc *dc)
+int dc_restart(struct task *task)
 {
-    dc_terminate(dc);
-    dc_start(dc);
+    dc_stop(task);
+    dc_start(task);
     return 0;
 }
 
-
-dc_list *dcl = 0;
-int dc_register(struct dc *dc)
+int dc_register(struct task_group *group, struct task *task)
 {
-    if (dcl) {
-        dc->next = dcl;
+    task->group = group;
+    if (group->tasks) {
+        assert (group->tasks->prev == 0);
+        group->tasks->prev = task;
+        task->next = group->tasks;
     }
-    dcl = dc;
-    PLUGIN_RUN(register, (dc));
+    group->tasks = task;
+    PLUGIN_RUN(register, (task));
+    return 0;
+}
+
+int dc_unregister(struct task_group *group, struct task *task)
+{
+    PLUGIN_RUN(unregister, (task));
+
+    if (task->prev)
+        task->prev->next = task->next;
+    if (task->next)
+        task->next->prev = task->prev;
+    if (group->tasks == task)
+        group->tasks = task->next;
+
+    free (task->name);
+    free (task->cmd);
+    free (task);
+
     return 0;
 }
 
 static int running = 1;
-
 int dc_quit()
 {
     running = 0;
@@ -111,8 +127,16 @@ extern struct dc_plugin process_plugin;
 extern struct dc_plugin cgroup_plugin;
 #endif
 
+struct task_group *task_groups;
 int main(int argc, char **argv)
 {
+
+
+    if (getuid() != 0) {
+        panic("sorry, must be superuser");
+    }
+
+
 #ifdef DYNAMIC_PLUGINS
     //TODO: not very dynamic...
     dc_plugins = &process_plugin;
@@ -123,27 +147,28 @@ int main(int argc, char **argv)
 
     log_info("dc", "Moorlight 1 booting up");
 
+    task_groups = calloc(1,  sizeof(struct task_group));
+    task_groups->name = "default";
+    PLUGIN_RUN(register_group, (task_groups));
+
+
+
 
     //test
-    struct dc dc;
-    memset(&dc, 0, sizeof(struct dc));
-    dc.name = "test";
-    dc.cmd =  "/home/aep/proj/moorlight/test/testdaemon.sh";
-    dc.next = 0;
-    dc_register(&dc);
+    struct task *test = calloc(1, sizeof(struct task));
+    test->name = strdup("test");
+    test->cmd  = strdup("/home/aep/proj/moorlight/test/testdaemon.sh");
+    dc_register(task_groups, test);
 
-
-    struct dc *dci = dcl;
-    while (dci) {
-        dc_start(dci);
-        dci = dci->next;
-    }
+    for (struct task_group *i = task_groups; i ; i = i->next)
+        for (struct task *j = i->tasks; j ; j = j->next)
+            dc_start(j);
 
     while (running) {
         fd_set rfds;
         FD_ZERO(&rfds);
         int maxfd = 0;
-        PLUGIN_RUN(select, (dcl, &rfds, &maxfd));
+        PLUGIN_RUN(select, (&rfds, &maxfd));
 
         int ret = 0;
         do {
@@ -156,19 +181,21 @@ int main(int argc, char **argv)
 
         fprintf(stderr, "activated %i \n", ret);
 
-        PLUGIN_RUN(activate, (dcl, &rfds));
+        PLUGIN_RUN(activate, (&rfds));
     }
 
-    dci = dcl;
-    while (dci) {
-        dc_terminate(dci);
-        dci = dci->next;
+    for (struct task_group *i = task_groups; i ; i = i->next)
+        for (struct task *j = i->tasks; j ; j = j->next)
+            dc_stop(j);
+
+
+    for (struct task_group *i = task_groups; i ; i = i->next) {
+        for (struct task *j = i->tasks; j ; j = j->next) {
+            dc_unregister(i, j);
+        }
+        PLUGIN_RUN(unregister_group, (i));
     }
-    dci = dcl;
-    while (dci) {
-        PLUGIN_RUN(unregister, (dci));
-        dci = dci->next;
-    }
+
     PLUGIN_RUN(teardown, ());
 
 

@@ -60,11 +60,11 @@ int sysv_init()
             default_runlevel = strdup(runlevel);
         } else if (strcmp(action, "respawn") == 0) {
             log_info("sysv", "adding dc %s", cmd);
-            struct dc *dc = malloc(sizeof(struct dc));
-            dc->name = strdup(id);
-            dc->cmd =  strdup(cmd);
-            dc->next = 0;
-            dc_register(dc);
+            struct task *task = malloc(sizeof(struct task));
+            task->name = strdup(id);
+            task->cmd =  strdup(cmd);
+            task->next = 0;
+            dc_register(task);
         } else {
             struct sysv_entry *entry = malloc(sizeof(struct sysv_entry));
             entry->id =  strdup(id);
@@ -84,46 +84,55 @@ int sysv_teardown()
 {
     return 0;
 }
-int sysv_register(struct dc *dc)
+int sysv_register(struct task *task)
 {
     return 0;
 }
-int sysv_unregister(struct dc *dc)
+int sysv_unregister(struct task *task)
 {
     return 0;
 }
-
-int sysv_prepare(struct dc *dc)
-{
-    return 0;
-}
-
-int sysv_prepare_child(struct dc *dc)
+int sysv_register_group(struct task_group *group)
 {
     return 0;
 }
 
-int sysv_prepare_parent(struct dc *dc)
+int sysv_unregister_group(struct task_group *group)
 {
     return 0;
 }
 
-int sysv_terminate(struct dc *dc)
+int sysv_prepare(struct task *task)
 {
     return 0;
 }
 
-int sysv_exec(struct dc *dc)
+int sysv_prepare_child(struct task *task)
 {
     return 0;
 }
 
-int sysv_select (dc_list *dc, fd_set *rfds, int *maxfd)
+int sysv_prepare_parent(struct task *task)
 {
     return 0;
 }
 
-int sysv_activate(dc_list *dc, fd_set *rfds)
+int sysv_terminate(struct task *task)
+{
+    return 0;
+}
+
+int sysv_exec(struct task *task)
+{
+    return 0;
+}
+
+int sysv_select (fd_set *rfds, int *maxfd)
+{
+    return 0;
+}
+
+int sysv_activate(fd_set *rfds)
 {
     return 0;
 }
@@ -143,6 +152,8 @@ struct dc_plugin sysv_plugin =
     &sysv_terminate,
     &sysv_select,
     &sysv_activate,
+    &sysv_register_group,
+    &sysv_unregister_group
     0
 };
 #endif
