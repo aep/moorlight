@@ -29,12 +29,12 @@ void log_debug(const char *component, const char *msg, ...)
 
 void log_error(const char *component, const char *msg, ...)
 {
-    fprintf(stderr, "[ERROR] [%s] ", component);
+    fprintf(stderr, "\033[0;31m[ERROR] [%s] ", component);
     va_list args;
     va_start(args, msg);
     vfprintf(stderr, msg, args);
     va_end(args);
-    fprintf(stderr, "\n");
+    fprintf(stderr, "\033[0m\n");
 }
 
 

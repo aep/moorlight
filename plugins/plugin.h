@@ -10,6 +10,7 @@ struct dc
     pid_t pid;
     int proccom[2];
     int running;
+    ubus_t *bus_restart;
     ubus_t *bus_start;
     ubus_t *bus_stop;
     ubus_t *bus_status;
@@ -22,6 +23,8 @@ extern dc_list *dcl;
 
 typedef int (*dc_plugin_init)();
 typedef int (*dc_plugin_teardown)();
+typedef int (*dc_plugin_register)       (struct dc *dc);
+typedef int (*dc_plugin_unregister)     (struct dc *dc);
 typedef int (*dc_plugin_prepare)        (struct dc *dc);
 typedef int (*dc_plugin_prepare_child)  (struct dc *dc);
 typedef int (*dc_plugin_prepare_parent) (struct dc *dc);
@@ -35,6 +38,8 @@ struct dc_plugin
     const char *name;
     dc_plugin_init init;
     dc_plugin_teardown teardown;
+    dc_plugin_register reg;
+    dc_plugin_unregister unreg;
     dc_plugin_prepare prepare;
     dc_plugin_prepare_child prepare_child;
     dc_plugin_prepare_parent prepare_parent;
@@ -42,5 +47,6 @@ struct dc_plugin
     dc_plugin_terminate terminate;
     dc_plugin_select select;
     dc_plugin_activate activate;
+
     struct dc_plugin *next;
 };

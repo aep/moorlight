@@ -41,6 +41,16 @@ int process_teardown()
     return 0;
 }
 
+int process_register(struct dc *dc)
+{
+    return 0;
+}
+
+int process_unregister(struct dc *dc)
+{
+    return 0;
+}
+
 int process_prepare(struct dc *dc)
 {
     dc->running = 1;
@@ -153,6 +163,8 @@ struct dc_plugin process_plugin =
     "process",
     &process_init,
     &process_teardown,
+    &process_register,
+    &process_unregister,
     &process_prepare,
     &process_prepare_child,
     &process_prepare_parent,

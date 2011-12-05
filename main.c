@@ -82,14 +82,14 @@ int dc_restart(struct dc *dc)
 }
 
 
-
 dc_list *dcl = 0;
-int dc_add(struct dc *dc)
+int dc_register(struct dc *dc)
 {
     if (dcl) {
         dc->next = dcl;
     }
     dcl = dc;
+    PLUGIN_RUN(register, (dc));
     return 0;
 }
 
@@ -116,6 +116,14 @@ int main(int argc, char **argv)
     PLUGIN_RUN(init, ());
 
     log_info("dc", "Moorlight 1 booting up");
+
+
+    //test
+    struct dc dc;
+    dc.name = "test";
+    dc.cmd =  "/home/aep/proj/moorlight/test/testdaemon.sh";
+    dc.next = 0;
+    dc_register(&dc);
 
 
     struct dc *dci = dcl;
@@ -149,7 +157,14 @@ int main(int argc, char **argv)
         dc_terminate(dci);
         dci = dci->next;
     }
+    dci = dcl;
+    while (dci) {
+        PLUGIN_RUN(unregister, (dci));
+        dci = dci->next;
+    }
     PLUGIN_RUN(teardown, ());
+
+
     return 0;
 }
 

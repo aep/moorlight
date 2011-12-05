@@ -13,6 +13,19 @@ int cgroup_teardown()
     return 0;
 }
 
+
+int cgroup_register(struct dc *dc)
+{
+    log_debug("cgroup", "[%s] creating cgroup", dc->name);
+    return 0;
+}
+
+int cgroup_unregister(struct dc *dc)
+{
+    log_debug("cgroup", "[%s] removing cgroup", dc->name);
+    return 0;
+}
+
 int cgroup_prepare(struct dc *dc)
 {
     return 0;
@@ -25,7 +38,6 @@ int cgroup_prepare_child(struct dc *dc)
 
 int cgroup_prepare_parent(struct dc *dc)
 {
-    log_debug("cgroup", "[%s] creating group", dc->name);
     log_debug("cgroup", "[%s] adding pid %i to group", dc->name, dc->pid);
     return 0;
 }
@@ -47,6 +59,8 @@ struct dc_plugin cgroup_plugin =
     "cgroup",
     &cgroup_init,
     &cgroup_teardown,
+    &cgroup_register,
+    &cgroup_unregister,
     &cgroup_prepare,
     &cgroup_prepare_child,
     &cgroup_prepare_parent,

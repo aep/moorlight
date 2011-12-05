@@ -64,7 +64,7 @@ int sysv_init()
             dc->name = strdup(id);
             dc->cmd =  strdup(cmd);
             dc->next = 0;
-            dc_add(dc);
+            dc_register(dc);
         } else {
             struct sysv_entry *entry = malloc(sizeof(struct sysv_entry));
             entry->id =  strdup(id);
@@ -81,6 +81,14 @@ int sysv_init()
 }
 
 int sysv_teardown()
+{
+    return 0;
+}
+int sysv_register(struct dc *dc)
+{
+    return 0;
+}
+int sysv_unregister(struct dc *dc)
 {
     return 0;
 }
@@ -126,6 +134,8 @@ struct dc_plugin sysv_plugin =
     "sysv",
     &sysv_init,
     &sysv_teardown,
+    &sysv_register,
+    &sysv_unregister,
     &sysv_prepare,
     &sysv_prepare_child,
     &sysv_prepare_parent,
