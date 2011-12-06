@@ -24,8 +24,14 @@ struct sysv_entry
     char *cmd;
 };
 
+static struct task_group *sysv_group = 0;
+
 int sysv_init()
 {
+
+    sysv_group = calloc(1,  sizeof(struct task_group));
+    sysv_group->name = "sysv";
+    dc_register_group(sysv_group);
 
     struct sysv_entry *entries = 0;
 
@@ -60,13 +66,13 @@ int sysv_init()
             default_runlevel = strdup(runlevel);
         } else if (strcmp(action, "respawn") == 0) {
             log_info("sysv", "adding dc %s", cmd);
-            struct task *task = malloc(sizeof(struct task));
+            struct task *task = calloc(1, sizeof(struct task));
             task->name = strdup(id);
             task->cmd =  strdup(cmd);
             task->next = 0;
-            dc_register(task);
+            dc_register(sysv_group, task);
         } else {
-            struct sysv_entry *entry = malloc(sizeof(struct sysv_entry));
+            struct sysv_entry *entry = calloc(1, sizeof(struct sysv_entry));
             entry->id =  strdup(id);
             entry->runlevel = strdup(runlevel);
             entry->cmd = strdup(cmd);
@@ -117,7 +123,7 @@ int sysv_prepare_parent(struct task *task)
     return 0;
 }
 
-int sysv_terminate(struct task *task)
+int sysv_stop(struct task *task)
 {
     return 0;
 }

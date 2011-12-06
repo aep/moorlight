@@ -162,6 +162,7 @@ static void update()
             }
         }
     }
+    // TODO: detect processes that double forked and are now our child
 }
 
 int process_activate(fd_set *rfds)

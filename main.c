@@ -31,13 +31,17 @@
 
 #else
 #define PLUGIN_RUN(fun, call) \
+    if (iaminit)  sysv_ ## fun call; \
     process_ ## fun call; \
     meubus_ ## fun call; \
     cgroup_ ## fun call; \
-//    sysv_ ## fun call; \
 
 #endif
 
+
+
+
+static int iaminit = 0;
 
 #ifdef DYNAMIC_PLUGINS
 static struct dc_plugin *dc_plugins = 0;
@@ -85,6 +89,21 @@ int dc_restart(struct task *task)
     return 0;
 }
 
+
+struct task_group *task_groups = 0;
+
+int dc_register_group(struct task_group *group)
+{
+    if (task_groups) {
+        assert (task_groups->prev == 0);
+        task_groups->prev = group;
+        group->next = task_groups;
+    }
+    task_groups = group;
+    PLUGIN_RUN(register_group, (group));
+    return 0;
+}
+
 int dc_register(struct task_group *group, struct task *task)
 {
     task->group = group;
@@ -127,14 +146,19 @@ extern struct dc_plugin process_plugin;
 extern struct dc_plugin cgroup_plugin;
 #endif
 
-struct task_group *task_groups;
 int main(int argc, char **argv)
 {
 
-
-    if (getuid() != 0) {
+    if (getuid() != 0)
         panic("sorry, must be superuser");
+
+    if (strcmp(argv[0], "/sbin/init") == 0) {
+        iaminit = 1;
+        //FIXME: ugh
+
+        system("mount -n tmpfs -t tmpfs /task");
     }
+
 
 
 #ifdef DYNAMIC_PLUGINS
@@ -147,18 +171,17 @@ int main(int argc, char **argv)
 
     log_info("dc", "Moorlight 1 booting up");
 
-    task_groups = calloc(1,  sizeof(struct task_group));
-    task_groups->name = "default";
-    PLUGIN_RUN(register_group, (task_groups));
-
-
-
+    struct task_group *default_group = calloc(1,  sizeof(struct task_group));
+    default_group->name = "default";
+    dc_register_group(default_group);
 
     //test
+    /*
     struct task *test = calloc(1, sizeof(struct task));
     test->name = strdup("test");
     test->cmd  = strdup("/home/aep/proj/moorlight/test/testdaemon.sh");
-    dc_register(task_groups, test);
+    dc_register(default_group, test);
+    */
 
     for (struct task_group *i = task_groups; i ; i = i->next)
         for (struct task *j = i->tasks; j ; j = j->next)
@@ -179,7 +202,7 @@ int main(int argc, char **argv)
             assume(ret);
         }
 
-        fprintf(stderr, "activated %i \n", ret);
+        log_debug("dc", "activated %i ", ret);
 
         PLUGIN_RUN(activate, (&rfds));
     }
