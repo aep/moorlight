@@ -12,8 +12,11 @@ struct task
     char *cmd; //replace with config
     int state;
     pid_t pid;
-    int proccom[2];
     int running;
+    time_t last_died;
+    int toofastcounter;
+
+    void *pp_proc;
 
     struct task_group *group;
 

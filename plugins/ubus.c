@@ -284,7 +284,7 @@ int meubus_activate(fd_set *rfds)
                     task->name = strdup(name);
                     task->cmd =  strdup(cmd);
                     task->next = 0;
-                    dc_register(task);
+                    dc_register(i, task);
 
                     const char *resp;
                     if (dc_start(task) == 0) {

@@ -1,4 +1,5 @@
 #include <fcntl.h>
+#include <stdlib.h>
 #include <signal.h>
 #include <unistd.h>
 #include <time.h>
@@ -19,11 +20,21 @@ static int sigp[2];
 static void sigterm()  { write(sigp[1], "T", 1); }
 static void sigchild() { write(sigp[1], "C", 1); }
 
+
+
+#define KCLOSE(p) if (p != -1) close (p); p = -1;
+
+struct process
+{
+    int startp[2];
+    int deathp[2];
+};
+
 int process_init()
 {
     assume(pipe(sigp));
-    fcntl(sigp[0],F_SETFL,fcntl(sigp[0],F_GETFL)|O_NONBLOCK);
-    fcntl(sigp[1],F_SETFL,fcntl(sigp[1],F_GETFL)|O_NONBLOCK);
+    fcntl(sigp[0],F_SETFL,fcntl(sigp[0],F_GETFL)|O_NONBLOCK|FD_CLOEXEC);
+    fcntl(sigp[1],F_SETFL,fcntl(sigp[1],F_GETFL)|O_NONBLOCK|FD_CLOEXEC);
 
     signal(SIGINT,   sigterm);
     signal(SIGTERM,  sigterm);
@@ -52,56 +63,80 @@ int process_unregister_group(struct task_group *group)
 
 int process_register(struct task *task)
 {
+    struct process *proc = calloc(1, sizeof(struct process));
+    task->pp_proc = proc;
+
     return 0;
 }
 
 int process_unregister(struct task *task)
 {
+    free(task->pp_proc);
+    task->pp_proc = 0;
     return 0;
 }
 
 int process_prepare(struct task *task)
 {
-    assume(pipe(task->proccom));
-    fcntl(task->proccom[0],F_SETFL,fcntl(task->proccom[0],F_GETFL)|O_NONBLOCK);
-    fcntl(task->proccom[1],F_SETFL,fcntl(task->proccom[1],F_GETFL)|O_NONBLOCK);
+    struct process *proc = task->pp_proc;
+
+    assume(pipe(proc->startp));
+    fcntl(proc->startp[0],F_SETFL,fcntl(proc->startp[0],F_GETFL)|O_NONBLOCK);
+    fcntl(proc->startp[1],F_SETFL,fcntl(proc->startp[1],F_GETFL)|O_NONBLOCK);
+    assume(pipe(proc->deathp));
+    fcntl(proc->deathp[0],F_SETFL,fcntl(proc->deathp[0],F_GETFL)|O_NONBLOCK);
+    fcntl(proc->deathp[1],F_SETFL,fcntl(proc->deathp[1],F_GETFL)|O_NONBLOCK);
     return 0;
 }
 
 int process_prepare_child(struct task *task)
 {
+    struct process *proc = task->pp_proc;
+    KCLOSE(proc->startp[0]);
+    fcntl(proc->startp[1], F_SETFD, fcntl(proc->startp[1], F_GETFD) | FD_CLOEXEC);
+
     // become session leader
     setsid();
-
     return 0;
 }
 
 int process_prepare_parent(struct task *task)
 {
-    close(task->proccom[1]);
+    struct process *proc = task->pp_proc;
+
+    KCLOSE(proc->startp[1]);
+
     log_debug("process", "[%s] has pid %i", task->name, task->pid);
     char buff;
 
     int ret;
     for (;;) {
-        ret = read(task->proccom[0], &buff, 1);
-        if (ret < 1) {
+        ret = read(proc->startp[0], &buff, 1);
+        if (ret == 0) {
+            log_debug("process", "[%s] startpipe sycned. all good.", task->name);
+            return 0;
+        } else  if (ret < 1) {
             if (errno == EAGAIN)
                 continue;
-            else
+            else if (ret == 0)
                 assume(ret);
         } else {
-            break;
+            log_error("process", "[%s] startpipe indicates error %i: %s. ",  task->name, buff, strerror(buff));
+            return buff;
         }
     }
-    log_debug("process", "[%s] pipe sycned %i", task->name, ret);
     return 0;
 }
 
 int process_stop(struct task *task)
 {
-    if (!task->pid)
+    struct process *proc = task->pp_proc;
+    KCLOSE(proc->startp[0]);
+
+    if (!task->pid) {
+        log_error("process", "[%s] has pid %i", task->name, task->pid);
         return 2;
+    }
     log_debug("process", "[%s] terminating session %i", task->name, task->pid);
 
     //nuke the entire process group
@@ -120,6 +155,7 @@ int process_stop(struct task *task)
 
 int process_exec(struct task *task)
 {
+    struct process *proc = task->pp_proc;
     log_debug("process", "about to exec %s", task->cmd);
     // execute
 
@@ -133,10 +169,11 @@ int process_exec(struct task *task)
         tk = strtok(NULL,  " \t");
     }
     argv[i] = 0;
-    close(task->proccom[0]);
-    write(task->proccom[1], "S", 1);
     execv(*argv, argv);
-    return 0;
+
+    //ok, that didn't work.
+    write(proc->startp[1], (char*)&errno, 1);
+    return 666;
 }
 
 int process_select (fd_set *rfds, int *maxfd)
@@ -156,7 +193,7 @@ static void update()
                 if (waitpid(task->pid, &(task->state), WNOHANG)) {
                     if (WIFEXITED(task->state) || WIFSIGNALED(task->state) ) {
                         log_info("process", "[%s] leader died", task->name);
-                        dc_restart(task);
+                        dc_on_died(task);
                     }
                 }
             }
@@ -167,10 +204,15 @@ static void update()
 
 int process_activate(fd_set *rfds)
 {
+    char buf [10];
     if (FD_ISSET(sigp[0], rfds)) {
-        char buf [10];
-        assume(read(sigp[0], buf, 1));
+        buf[0] = 'D';
+        read(sigp[0], buf, 1);
         switch (buf[0]) {
+            case 'D':
+                log_error("process", "sigp (%i) is dead. wtf? assuming glitch and trying to go on", sigp[0]);
+                sleep (6);
+                break;;
             case 'C':
                 update();
                 break;;

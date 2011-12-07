@@ -77,6 +77,8 @@ int sysv_init()
             entry->runlevel = strdup(runlevel);
             entry->cmd = strdup(cmd);
             if (strcmp(action, "sysinit") == 0) {
+                //FIXME: ugh
+                system(cmd);
             } else if (strcmp(action, "wait") == 0) {
             }
         }

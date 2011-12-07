@@ -17,24 +17,28 @@
 
 
 #if DYNAMIC_PLUGINS
-#define PLUGIN_RUN(fun, call) { \
+#define PLUGIN_RUN(r, fun, call) { \
     struct dc_plugin *plugin = dc_plugins; \
     while (plugin) { \
         if (!plugin->fun) { \
             plugin = plugin->next; \
             continue; \
         } \
-        (*plugin->fun)call; \
+        r = (*plugin->fun)call; \
+        if (r != 0) \
+           break; \
         plugin = plugin->next; \
     } \
 } \
 
 #else
-#define PLUGIN_RUN(fun, call) \
+#define PLUGIN_RUN(r, fun, call) \
     if (iaminit)  sysv_ ## fun call; \
-    process_ ## fun call; \
-    meubus_ ## fun call; \
-    cgroup_ ## fun call; \
+    r = process_ ## fun call; \
+    if (r == 0) \
+    r = meubus_ ## fun call; \
+    if (r == 0) \
+    r = cgroup_ ## fun call; \
 
 #endif
 
@@ -49,35 +53,53 @@ static struct dc_plugin *dc_plugins = 0;
 
 void dc_start_child(struct task *task)
 {
-    PLUGIN_RUN(prepare_child, (task));
-    PLUGIN_RUN(exec, (task));
+    int r = 0;
+    PLUGIN_RUN(r, prepare_child, (task));
+    PLUGIN_RUN(r, exec, (task));
     // if we're here, no plugin could do an exec
     log_error("dc", "no plugin can start task %s", task->name);
+    exit (666);
 }
 
-void dc_start_parent(struct task *task)
+int dc_start_parent(struct task *task)
 {
-    PLUGIN_RUN(prepare_parent, (task));
+    int r = 0;
+    PLUGIN_RUN(r, prepare_parent, (task));
+    return r;
 }
 
 int dc_start(struct task *task)
 {
+    int r = 0;
     if (task->running != 0 )
         return 0;
     task->running = 1;
-    PLUGIN_RUN(prepare, (task));
+    PLUGIN_RUN(r, prepare, (task));
+    if (r) {
+        log_error("dc", "task prepare failed for %s", task->name);
+        task->running = 0;
+        return r;
+    }
     assume(task->pid = fork());
     if (task->pid == 0) {
         dc_start_child(task);
     } else if (task->pid > 0){
-        dc_start_parent(task);
+        r = dc_start_parent(task);
+    } else {
+        r = errno;
     }
+    if (r) {
+        log_error("dc", "task starting failed for %s", task->name);
+        task->running = 0;
+    }
+    return r;
 }
 int dc_stop(struct task *task)
 {
+    int r = 0;
     if (task->running == 0 )
         return 0;
-    PLUGIN_RUN(stop, (task));
+    PLUGIN_RUN(r, stop, (task));
     task->running = 0;
     return 0;
 }
@@ -89,6 +111,21 @@ int dc_restart(struct task *task)
     return 0;
 }
 
+int dc_on_died(struct task *task)
+{
+    time_t now = time(0);
+    if (now - task->last_died < 5) {
+        if (task->toofastcounter++ > 10) {
+            log_error("dc", "task %s respawing too fast. human intervention required", task->name);
+            dc_stop(task);
+            return 3;
+        }
+    }
+    task->toofastcounter = 0;
+    task->last_died = now;
+    dc_restart(task);
+    return 0;
+}
 
 struct task_group *task_groups = 0;
 
@@ -100,7 +137,8 @@ int dc_register_group(struct task_group *group)
         group->next = task_groups;
     }
     task_groups = group;
-    PLUGIN_RUN(register_group, (group));
+    int r = 0;
+    PLUGIN_RUN(r, register_group, (group));
     return 0;
 }
 
@@ -113,13 +151,15 @@ int dc_register(struct task_group *group, struct task *task)
         task->next = group->tasks;
     }
     group->tasks = task;
-    PLUGIN_RUN(register, (task));
+    int r = 0;
+    PLUGIN_RUN(r, register, (task));
     return 0;
 }
 
 int dc_unregister(struct task_group *group, struct task *task)
 {
-    PLUGIN_RUN(unregister, (task));
+    int r = 0;
+    PLUGIN_RUN(r, unregister, (task));
 
     if (task->prev)
         task->prev->next = task->next;
@@ -159,6 +199,7 @@ int main(int argc, char **argv)
         system("mount -n tmpfs -t tmpfs /task");
     }
 
+    log_info("dc", "Moorlight 1 booting up");
 
 
 #ifdef DYNAMIC_PLUGINS
@@ -167,21 +208,19 @@ int main(int argc, char **argv)
     dc_plugins->next = &cgroup_plugin;
 #endif
 
-    PLUGIN_RUN(init, ());
+    int r = 0;
+    PLUGIN_RUN(r, init, ());
 
-    log_info("dc", "Moorlight 1 booting up");
 
     struct task_group *default_group = calloc(1,  sizeof(struct task_group));
     default_group->name = "default";
     dc_register_group(default_group);
 
     //test
-    /*
     struct task *test = calloc(1, sizeof(struct task));
     test->name = strdup("test");
     test->cmd  = strdup("/home/aep/proj/moorlight/test/testdaemon.sh");
     dc_register(default_group, test);
-    */
 
     for (struct task_group *i = task_groups; i ; i = i->next)
         for (struct task *j = i->tasks; j ; j = j->next)
@@ -191,7 +230,7 @@ int main(int argc, char **argv)
         fd_set rfds;
         FD_ZERO(&rfds);
         int maxfd = 0;
-        PLUGIN_RUN(select, (&rfds, &maxfd));
+        PLUGIN_RUN(r, select, (&rfds, &maxfd));
 
         int ret = 0;
         do {
@@ -204,7 +243,7 @@ int main(int argc, char **argv)
 
         log_debug("dc", "activated %i ", ret);
 
-        PLUGIN_RUN(activate, (&rfds));
+        PLUGIN_RUN(r, activate, (&rfds));
     }
 
     for (struct task_group *i = task_groups; i ; i = i->next)
@@ -216,10 +255,11 @@ int main(int argc, char **argv)
         for (struct task *j = i->tasks; j ; j = j->next) {
             dc_unregister(i, j);
         }
-        PLUGIN_RUN(unregister_group, (i));
+        int r = 0;
+        PLUGIN_RUN(r, unregister_group, (i));
     }
 
-    PLUGIN_RUN(teardown, ());
+    PLUGIN_RUN(r, teardown, ());
 
 
     return 0;
