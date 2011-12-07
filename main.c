@@ -15,153 +15,206 @@
 #include "logger.h"
 #include "main.h"
 
-#define MODULE_RUN(r, fun, call) \
-    r = process_ ## fun call; \
-    if (r == 0) \
-    r = meubus_ ## fun call; \
-    if (r == 0) \
-    r = cgroup_ ## fun call; \
+#define MOD_PROCESS 1
+#define MOD_UBUS 1
+// #define MOD_SYSV 1
 
-
-static int iaminit = 0;
-
-#ifdef DYNAMIC_MODULES
-static struct dc_plugin *dc_plugins = 0;
+#if defined(MOD_PROCESS)
+#define mod_process(f) mod_process_ ## f
+#else
+#define mod_process(f) 0
 #endif
 
-void dc_start_child(struct task *task)
-{
-    int r = 0;
-    MODULE_RUN(r, prepare_child, (task));
-    MODULE_RUN(r, exec, (task));
-    // if we're here, no plugin could do an exec
-    log_error("dc", "no plugin can start task %s", task->name);
-    exit(r);
-}
+#if defined(MOD_UBUS)
+#define mod_ubus(f) mod_ubus_ ## f
+#else
+#define mod_ubus(f) 0
+#endif
 
-int dc_start_parent(struct task *task)
-{
-    int r = 0;
-    MODULE_RUN(r, prepare_parent, (task));
-    return r;
-}
+#if defined(MOD_SYSV)
+#define mode_sysv(f) mod_sysv_ ## f
+#else
+#define mod_sysv(f) 0
+#endif
 
-int dc_start(struct task *task)
-{
-    int r = 0;
-    if (task->running != 0 )
-        return 0;
-    task->running = 1;
-    MODULE_RUN(r, prepare, (task));
-    if (r) {
-        log_error("dc", "task prepare failed for %s", task->name);
-        task->running = 0;
-        return r;
-    }
-    assume(task->pid = fork());
-    if (task->pid == 0) {
-        dc_start_child(task);
-    } else if (task->pid > 0){
-        r = dc_start_parent(task);
-    } else {
-        r = errno;
-    }
-    if (r) {
-        log_error("dc", "task starting failed for %s", task->name);
-        task->running = 4;
-        dc_stop(task);
+/////-------------------------------- events ------------------------------------------
 
-    }
-    return r;
-}
-int dc_stop(struct task *task)
+int dc_on_task_started(struct task *task)
 {
-    int r = 0;
-    if (task->running == 0 )
-        return 0;
-    MODULE_RUN(r, stop, (task));
-    task->running = 0;
+    mod_ubus(on_task_started(task));
     return 0;
 }
 
-int dc_restart(struct task *task)
+int dc_on_task_stopped(struct task *task)
 {
-    dc_stop(task);
-    dc_start(task);
+    mod_ubus(on_task_stopped(task));
     return 0;
 }
 
-int dc_on_died(struct task *task)
+int dc_on_task_died(struct task *task)
 {
     time_t now = time(0);
     if (now - task->last_died < 5) {
         if (task->toofastcounter++ > 10) {
             log_error("dc", "task %s respawing too fast. human intervention required", task->name);
-            dc_stop(task);
+            dc_task_stop(task);
             return 3;
         }
     }
     task->toofastcounter = 0;
     task->last_died = now;
-    dc_restart(task);
+    dc_task_restart(task);
     return 0;
 }
 
+/////-------------------------------- hooks ------------------------------------------
+
+int dc_fork_child(struct task *task)
+{
+    return 0;
+}
+
+int dc_fork_parent(struct task *task)
+{
+    return 0;
+}
+
+/////-------------------------------- control ------------------------------------------
+
+int dc_task_start(struct task *task)
+{
+    if (task->running != 0)
+        return 0;
+    task->running = 1;
+    int r = 0;
+    r =  mod_process(task_start(task));
+    if (r != 0) {
+        log_error("dc", "task starting failed for %s", task->name);
+        task->running = 4;
+        dc_task_stop(r);
+        return r;
+    }
+
+    dc_on_task_started(task);
+    return r;
+}
+
+int dc_task_stop(struct task *task)
+{
+    int r = 0;
+    if (task->running == 0 )
+        return 0;
+
+    mod_process(task_stop(task));
+    task->running = 0;
+
+    dc_on_task_stopped(task);
+    return 0;
+}
+
+int dc_task_restart(struct task *task)
+{
+    dc_task_stop(task);
+    dc_task_start(task);
+    return 0;
+}
+
+/////-------------------------------- registry ------------------------------------------
+
 struct task_group *task_groups = 0;
 
-int dc_register_group(struct task_group *group)
+void dc_delete_group(struct task_group *group);
+struct task_group *dc_new_group(const char *name)
 {
+    struct task_group *group = calloc(1,  sizeof(struct task_group));
+    group->name = strdup(name);
+
     if (task_groups) {
         assert (task_groups->prev == 0);
         task_groups->prev = group;
         group->next = task_groups;
     }
     task_groups = group;
+
     int r = 0;
-    MODULE_RUN(r, register_group, (group));
+    r = mod_ubus(new_group(group)); if (r != 0) goto unroll;
+
+    return group;
+unroll:
+    dc_delete_group(group);
     return 0;
 }
-
-int dc_register(struct task_group *group, struct task *task)
+void dc_delete_group(struct task_group *group)
 {
+    mod_ubus(delete_group(group));
+
+    if (group->prev)
+        group->prev->next = group->next;
+    if (group->next)
+        group->next->prev = group->prev;
+    if (task_groups == group)
+        task_groups = group->next;
+
+    free (group->name);
+    free (group);
+}
+
+
+
+void dc_delete_task(struct task *task);
+struct task *dc_new_task(struct task_group *group, const char *name)
+{
+    struct task *task = calloc(1,  sizeof(struct task));
     for (struct task_group *i = task_groups; i ; i = i->next) {
         for (struct task *j = i->tasks; j ; j = j->next) {
-            if (strcmp(task->name, j->name) == 0) {
-                log_error("dc", "task %s already registered in group %s", task->name, i->name);
-                return 3;
+            if (strcmp(task->name, name) == 0) {
+                log_error("dc", "task %s already registered in group %s", name, i->name);
+                return 0;
             }
         }
     }
     task->group = group;
+    task->name = strdup(name);
     if (group->tasks) {
         assert (group->tasks->prev == 0);
         group->tasks->prev = task;
         task->next = group->tasks;
     }
     group->tasks = task;
-    int r = 0;
-    MODULE_RUN(r, register, (task));
+
+    if (mod_process  (new_task(task)) != 0) goto unroll;
+    if (mod_ubus     (new_task(task)) != 0) goto unroll;
+
+    return task;
+
+unroll:
+    dc_delete_task(task);
     return 0;
 }
-
-int dc_unregister(struct task_group *group, struct task *task)
+void dc_delete_task(struct task *task)
 {
-    int r = 0;
-    MODULE_RUN(r, unregister, (task));
+
+    mod_ubus    (delete_task(task));
+    mod_process (delete_task(task));
+
 
     if (task->prev)
         task->prev->next = task->next;
     if (task->next)
         task->next->prev = task->prev;
-    if (group->tasks == task)
-        group->tasks = task->next;
+    if (task->group->tasks == task)
+        task->group->tasks = task->next;
 
-    free (task->name);
-    free (task->cmd);
+    if (task->name)
+        free (task->name);
+    if (task->cmd)
+        free (task->cmd);
     free (task);
-
-    return 0;
 }
+
+
+
+/////-------------------------------- mainloop ------------------------------------------
 
 static int running = 1;
 int dc_quit()
@@ -169,57 +222,39 @@ int dc_quit()
     running = 0;
 }
 
-#ifdef DYNAMIC_MODULES
-extern struct dc_plugin process_plugin;
-extern struct dc_plugin cgroup_plugin;
-#endif
-
 int main(int argc, char **argv)
 {
-
     if (getuid() != 0)
         panic("sorry, must be superuser");
 
+    int iaminit = 0;
     if (strcmp(argv[0], "/sbin/init") == 0) {
         iaminit = 1;
         //FIXME: ugh
-
         system("mount -n tmpfs -t tmpfs /task");
     }
 
     log_info("dc", "Moorlight 1 booting up");
 
-
-#ifdef DYNAMIC_MODULES
-    //TODO: not very dynamic...
-    dc_plugins = &process_plugin;
-    dc_plugins->next = &cgroup_plugin;
-#endif
-
     int r = 0;
-    if (iaminit) r = sysv_init();
-    MODULE_RUN(r, init, ());
+    if (iaminit) r = mod_sysv (init());
+    r = mod_process (init());
+    r = mod_ubus    (init());
 
-
-    struct task_group *default_group = calloc(1,  sizeof(struct task_group));
-    default_group->name = "default";
-    dc_register_group(default_group);
-
-    //test
-    struct task *test = calloc(1, sizeof(struct task));
-    test->name = strdup("test");
+    struct task_group *default_group = dc_new_group("default");
+    struct task *test = dc_new_task(default_group, "test");
     test->cmd  = strdup("/home/aep/proj/moorlight/test/testdaemon.sh");
-    dc_register(default_group, test);
 
     for (struct task_group *i = task_groups; i ; i = i->next)
         for (struct task *j = i->tasks; j ; j = j->next)
-            dc_start(j);
+            dc_task_start(j);
 
     while (running) {
         fd_set rfds;
         FD_ZERO(&rfds);
         int maxfd = 0;
-        MODULE_RUN(r, select, (&rfds, &maxfd));
+        mod_ubus     (select(&rfds, &maxfd));
+        mod_process  (select(&rfds, &maxfd));
 
         int ret = 0;
         do {
@@ -232,24 +267,24 @@ int main(int argc, char **argv)
 
         log_debug("dc", "activated %i ", ret);
 
-        MODULE_RUN(r, activate, (&rfds));
+        mod_ubus    (activate(&rfds));
+        mod_process (activate(&rfds));
     }
-
-    for (struct task_group *i = task_groups; i ; i = i->next)
-        for (struct task *j = i->tasks; j ; j = j->next)
-            dc_stop(j);
-
 
     for (struct task_group *i = task_groups; i ; i = i->next) {
         for (struct task *j = i->tasks; j ; j = j->next) {
-            dc_unregister(i, j);
+            dc_task_stop(j);
+            dc_delete_task(j);
         }
         int r = 0;
-        MODULE_RUN(r, unregister_group, (i));
+        dc_delete_group(i);
     }
 
-    MODULE_RUN(r, teardown, ());
-    if (iaminit) r = sysv_teardown();
+    mod_ubus     (teardown());
+    mod_process  (teardown());
+
+    if (iaminit)
+        mod_sysv (teardown());
 
 
     return 0;

@@ -19,7 +19,7 @@
 
 static ubus_t *bus_newgroup;
 
-int meubus_init()
+int mod_ubus_init()
 {
     //TODO: should log it as error.
     signal(SIGPIPE, SIG_IGN);
@@ -31,16 +31,55 @@ int meubus_init()
     log_debug("ubus", "plugin initialized");
     return 0;
 }
-
-int meubus_teardown()
+void mod_ubus_teardown()
 {
     if (bus_newgroup)
         ubus_destroy(bus_newgroup);
     bus_newgroup = 0;
-    return 0;
 }
 
-int meubus_register(struct task *task)
+
+
+int mod_ubus_new_group(struct task_group *group)
+{
+    const char *path = "/task";
+
+    char *nam = calloc(strlen(path) + strlen(group->name) + 14, sizeof(char));
+    group->servicepath = nam;
+    strcpy(nam, path);
+    strcat(nam, "/");
+    strcat(nam, group->name);
+    strcat(nam, "/");
+    int e = strlen(nam);
+
+    log_info("ubus", "creating group object %s", nam);
+
+    strcat(nam, "new");
+    group->bus_new = ubus_create(nam);
+    nam[e] = 0;
+
+    if (!group->bus_new)
+        log_error("ubus", "unable to create bus %s: %s", nam, strerror(errno));
+
+    return 0;
+}
+void mod_ubus_delete_group(struct task_group *group)
+{
+    log_debug("eubus", "[%s] removing group object", group->name);
+
+    if (group->bus_new)
+        ubus_destroy(group->bus_new);
+    group->bus_new = 0;
+    if (group->servicepath) {
+        rmdir(group->servicepath);
+        free(group->servicepath);
+    }
+    group->servicepath = 0;
+}
+
+
+
+int mod_ubus_new_task(struct task *task)
 {
     const char *path = task->group->servicepath;
     char *nam = calloc(strlen(path) + strlen(task->name) + 14, sizeof(char));
@@ -85,7 +124,7 @@ int meubus_register(struct task *task)
 
     return 0;
 }
-int meubus_unregister(struct task *task)
+int mod_ubus_delete_task(struct task *task)
 {
     log_info("ubus", "tearing down task object");
 
@@ -99,67 +138,23 @@ int meubus_unregister(struct task *task)
         ubus_destroy(task->bus_stop);
 
     char *nam = task->servicepath;
-    int e = strlen(nam);
+    if (nam) {
+        int e = strlen(nam);
 
-    strcat(nam, "pid");
-    unlink(nam);
-    nam[e] = 0;
+        strcat(nam, "pid");
+        unlink(nam);
+        nam[e] = 0;
 
-    rmdir(nam);
-    free(nam);
+        rmdir(nam);
+        free(nam);
+    }
     task->servicepath = 0;
     return 0;
 }
 
-int meubus_register_group(struct task_group *group)
-{
-    const char *path = "/task";
 
-    char *nam = calloc(strlen(path) + strlen(group->name) + 14, sizeof(char));
-    group->servicepath = nam;
-    strcpy(nam, path);
-    strcat(nam, "/");
-    strcat(nam, group->name);
-    strcat(nam, "/");
-    int e = strlen(nam);
 
-    log_info("ubus", "creating group object %s", nam);
-
-    strcat(nam, "new");
-    group->bus_new = ubus_create(nam);
-    nam[e] = 0;
-
-    if (!group->bus_new)
-        log_error("ubus", "unable to create bus %s: %s", nam, strerror(errno));
-
-    return 0;
-}
-
-int meubus_unregister_group(struct task_group *group)
-{
-    log_debug("meubus", "[%s] removing group object", group->name);
-
-    if (group->bus_new)
-        ubus_destroy(group->bus_new);
-
-    rmdir(group->servicepath);
-    free(group->servicepath);
-    group->servicepath = 0;
-
-    return 0;
-}
-
-int meubus_prepare(struct task *task)
-{
-    return 0;
-}
-
-int meubus_prepare_child(struct task *task)
-{
-    return 0;
-}
-
-int meubus_prepare_parent(struct task *task)
+int mod_ubus_on_task_started(struct task *task)
 {
     const char *msg = "started\n";
 
@@ -183,13 +178,11 @@ int meubus_prepare_parent(struct task *task)
 
     return 0;
 }
-
-int meubus_stop(struct task *task)
+int mod_ubus_on_task_stopped(struct task *task)
 {
     const char *msg = "stopped\n";
     if (task->bus_status)
         ubus_broadcast(task->bus_status, msg, strlen(msg));
-
 
     char *nam = task->servicepath;
     int e = strlen(nam);
@@ -205,12 +198,9 @@ int meubus_stop(struct task *task)
     return 0;
 }
 
-int meubus_exec(struct task *task)
-{
-    return 0;
-}
 
-int meubus_select (fd_set *rfds, int *maxfd)
+
+int mod_ubus_select(fd_set *rfds, int *maxfd)
 {
     int r = 0;
     if (bus_newgroup) {
@@ -248,8 +238,7 @@ int meubus_select (fd_set *rfds, int *maxfd)
     }
     return 0;
 }
-
-int meubus_activate(fd_set *rfds)
+int mod_ubus_activate(fd_set *rfds)
 {
     //TODO: implement new group call or use inotify on mkdir
     if (bus_newgroup) {
@@ -280,27 +269,19 @@ int meubus_activate(fd_set *rfds)
                         break;
                     }
                     log_info("ubus", "adding dc '%s'", cmd);
-                    struct task *task = calloc(1, sizeof(struct task));
-                    task->name = strdup(name);
-                    task->cmd =  strdup(cmd);
-                    task->next = 0;
+                    struct task *task = dc_new_task(i, name);
+                    task->cmd = cmd;
 
                     const char *resp;
-                    if (dc_register(i, task)) {
+                    if (!task) {
                         resp = "\e44\tregister failed\n";
-                        //FIXME: this is not safe. must find a way to call cleanup stuff
-                        //correctly when one plugin faulted in register.
-                        free (task->name);
-                        free (task->cmd);
-                        free (task);
-                    } else if (dc_start(task) == 0) {
+                    } else if (dc_task_start(task) == 0) {
                         resp = "started\n";
                     } else {
                         resp = "\e32\tunable to start\n";
                     }
                     ubus_write(chan, resp, strlen(resp));
                     ubus_disconnect(chan);
-
                     line = strtok(NULL,"\n\r");
                 }
             }
@@ -322,7 +303,7 @@ int meubus_activate(fd_set *rfds)
                     } else {
                         log_info("ubus", "bus command: restart %s", task->name);
                         const char *resp;
-                        if (dc_restart(task) == 0)
+                        if (dc_task_restart(task) == 0)
                             resp = "restarted\n";
                         else
                             resp = "failed\n";
@@ -340,7 +321,7 @@ int meubus_activate(fd_set *rfds)
                     } else {
                         log_info("ubus", "bus command: start %s", task->name);
                         const char *resp;
-                        if (dc_start(task) == 0)
+                        if (dc_task_start(task) == 0)
                             resp = "started\n";
                         else
                             resp = "failed\n";
@@ -358,7 +339,7 @@ int meubus_activate(fd_set *rfds)
                     } else {
                         log_info("ubus", "bus command: stop %s", task->name);
                         const char *resp;
-                        if (dc_stop(task) == 0)
+                        if (dc_task_stop(task) == 0)
                             resp = "stopped\n";
                         else
                             resp = "failed\n";

@@ -21,15 +21,15 @@ static void sigterm()  { write(sigp[1], "T", 1); }
 static void sigchild() { write(sigp[1], "C", 1); }
 
 
-
 #define KCLOSE(p) if (p != -1) close (p); p = -1;
+
 
 struct process
 {
     int startp[2];
 };
 
-int process_init()
+int mod_process_init()
 {
     assume(pipe(sigp));
     fcntl(sigp[0],F_SETFL,fcntl(sigp[0],F_GETFL)|O_NONBLOCK|FD_CLOEXEC);
@@ -44,49 +44,40 @@ int process_init()
     log_debug("process", "plugin initialized");
     return 0;
 }
-
-int process_teardown()
+void mod_process_teardown()
 {
-    return 0;
+    KCLOSE(sigp[0]);
+    KCLOSE(sigp[1]);
 }
 
-int process_register_group(struct task_group *group)
-{
-    return 0;
-}
 
-int process_unregister_group(struct task_group *group)
-{
-    return 0;
-}
 
-int process_register(struct task *task)
+
+int mod_process_new_task(struct task *task)
 {
     struct process *proc = calloc(1, sizeof(struct process));
     task->pp_proc = proc;
-
     return 0;
 }
-
-int process_unregister(struct task *task)
+void mod_process_delete_task(struct task *task)
 {
-    free(task->pp_proc);
+    if (task->pp_proc)
+        free(task->pp_proc);
     task->pp_proc = 0;
-    return 0;
 }
 
-int process_prepare(struct task *task)
+
+
+
+
+static void child(struct task *task)
 {
+    int r = dc_fork_child(task);
+    if (r) {
+        //TODO
+    }
+
     struct process *proc = task->pp_proc;
-
-    assume(pipe(proc->startp));
-    fcntl(proc->startp[0],F_SETFL,fcntl(proc->startp[0],F_GETFL)|O_NONBLOCK);
-    fcntl(proc->startp[1],F_SETFL,fcntl(proc->startp[1],F_GETFL)|O_NONBLOCK);
-    return 0;
-}
-
-int process_prepare_child(struct task *task)
-{
     KCLOSE(sigp[0]);
     KCLOSE(sigp[1]);
 
@@ -96,18 +87,42 @@ int process_prepare_child(struct task *task)
     signal(SIGSEGV,  SIG_DFL);
     signal(SIGCHLD,  SIG_DFL);
 
-
-    struct process *proc = task->pp_proc;
     KCLOSE(proc->startp[0]);
     fcntl(proc->startp[1], F_SETFD, fcntl(proc->startp[1], F_GETFD) | FD_CLOEXEC);
 
     // become session leader
     setsid();
-    return 0;
+
+    log_debug("process", "about to exec %s", task->cmd);
+    // execute
+
+    //TODO: this is just a hack
+    char *argv [1000];
+    int i = 0;
+    char *cop = strdup(task->cmd);
+    char *tk = strtok(cop, " \t");
+    while (tk) {
+        argv[i++] = tk;
+        tk = strtok(NULL,  " \t");
+    }
+    argv[i] = 0;
+    execv(*argv, argv);
+
+    //exec didn't work.
+
+    write(proc->startp[1], (char*)&errno, 1);
+    KCLOSE(proc->startp[1]);
+    exit (666);
+
 }
 
-int process_prepare_parent(struct task *task)
+static int parent(struct task *task)
 {
+    int r = dc_fork_parent(task);
+    if (r) {
+        //TODO
+    }
+
     struct process *proc = task->pp_proc;
 
     KCLOSE(proc->startp[1]);
@@ -134,7 +149,38 @@ int process_prepare_parent(struct task *task)
     return 0;
 }
 
-int process_stop(struct task *task)
+int mod_process_task_start(struct task *task)
+{
+    struct process *proc = task->pp_proc;
+
+    assume(pipe(proc->startp));
+    fcntl(proc->startp[0],F_SETFL,fcntl(proc->startp[0],F_GETFL)|O_NONBLOCK);
+    fcntl(proc->startp[1],F_SETFL,fcntl(proc->startp[1],F_GETFL)|O_NONBLOCK);
+
+    int r = 0;
+    if (r) {
+        log_error("process", "task prepare failed for %s", task->name);
+        task->running = 0;
+        return r;
+    }
+    assume(task->pid = fork());
+    if (task->pid == 0) {
+        child(task);
+    } else if (task->pid > 0){
+        r = parent(task);
+    } else {
+        r = errno;
+    }
+    if (r) {
+        log_error("process", "task starting failed for %s", task->name);
+        task->running = 4;
+        dc_task_stop(task);
+
+    }
+    return r;
+}
+
+int mod_process_task_stop(struct task *task)
 {
     struct process *proc = task->pp_proc;
     KCLOSE(proc->startp[0]);
@@ -159,31 +205,10 @@ int process_stop(struct task *task)
     return 0;
 }
 
-int process_exec(struct task *task)
-{
-    struct process *proc = task->pp_proc;
-    log_debug("process", "about to exec %s", task->cmd);
-    // execute
 
-    //TODO: this is just a hack
-    char *argv [1000];
-    int i = 0;
-    char *cop = strdup(task->cmd);
-    char *tk = strtok(cop, " \t");
-    while (tk) {
-        argv[i++] = tk;
-        tk = strtok(NULL,  " \t");
-    }
-    argv[i] = 0;
-    execv(*argv, argv);
 
-    //ok, that didn't work.
-    write(proc->startp[1], (char*)&errno, 1);
-    KCLOSE(proc->startp[1]);
-    return 666;
-}
 
-int process_select (fd_set *rfds, int *maxfd)
+int mod_process_select (fd_set *rfds, int *maxfd)
 {
     FD_SET(sigp[0], rfds);
     if (sigp[0] > *maxfd)
@@ -191,7 +216,7 @@ int process_select (fd_set *rfds, int *maxfd)
     return 0;
 }
 
-int dc_restart(struct task *task);
+int dc_task_restart(struct task *task);
 static void update()
 {
     for (struct task_group *i = task_groups; i ; i = i->next) {
@@ -200,7 +225,7 @@ static void update()
                 if (waitpid(task->pid, &(task->state), WNOHANG)) {
                     if (WIFEXITED(task->state) || WIFSIGNALED(task->state) ) {
                         log_info("process", "[%s] leader died", task->name);
-                        dc_on_died(task);
+                        dc_on_task_died(task);
                     }
                 }
             }
@@ -208,8 +233,7 @@ static void update()
     }
     // TODO: detect processes that double forked and are now our child
 }
-
-int process_activate(fd_set *rfds)
+int mod_process_activate(fd_set *rfds)
 {
     char buf [10];
     if (FD_ISSET(sigp[0], rfds)) {

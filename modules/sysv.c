@@ -27,10 +27,7 @@ static struct task_group *sysv_group = 0;
 int sysv_init()
 {
 
-    sysv_group = calloc(1,  sizeof(struct task_group));
-    sysv_group->name = "sysv";
-    dc_register_group(sysv_group);
-
+    sysv_group = dc_new_group("sysv");
     struct sysv_entry *entries = 0;
 
     log_debug("sysv", "plugin initialized");
@@ -64,11 +61,8 @@ int sysv_init()
             default_runlevel = strdup(runlevel);
         } else if (strcmp(action, "respawn") == 0) {
             log_info("sysv", "adding dc %s", cmd);
-            struct task *task = calloc(1, sizeof(struct task));
-            task->name = strdup(id);
-            task->cmd =  strdup(cmd);
-            task->next = 0;
-            dc_register(sysv_group, task);
+            struct task *task = dc_new_task(sysv_group, id);
+            task->cmd = cmd;
         } else {
             struct sysv_entry *entry = calloc(1, sizeof(struct sysv_entry));
             entry->id =  strdup(id);
@@ -85,8 +79,6 @@ int sysv_init()
     log_info("sysv", "default runlevel is %s", default_runlevel);
     return 0;
 }
-
-int sysv_teardown()
+void sysv_teardown()
 {
-    return 0;
 }

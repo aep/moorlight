@@ -40,3 +40,9 @@ struct task_group
     struct task_group *prev;
 };
 extern struct task_group *task_groups;
+
+
+/////-------------------------------- registry ------------------------------------------
+struct task_group *dc_new_group(const char *name);
+struct task *dc_new_task(struct task_group *group, const char *name);
+
