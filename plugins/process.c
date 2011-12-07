@@ -27,7 +27,6 @@ static void sigchild() { write(sigp[1], "C", 1); }
 struct process
 {
     int startp[2];
-    int deathp[2];
 };
 
 int process_init()
@@ -83,14 +82,21 @@ int process_prepare(struct task *task)
     assume(pipe(proc->startp));
     fcntl(proc->startp[0],F_SETFL,fcntl(proc->startp[0],F_GETFL)|O_NONBLOCK);
     fcntl(proc->startp[1],F_SETFL,fcntl(proc->startp[1],F_GETFL)|O_NONBLOCK);
-    assume(pipe(proc->deathp));
-    fcntl(proc->deathp[0],F_SETFL,fcntl(proc->deathp[0],F_GETFL)|O_NONBLOCK);
-    fcntl(proc->deathp[1],F_SETFL,fcntl(proc->deathp[1],F_GETFL)|O_NONBLOCK);
     return 0;
 }
 
 int process_prepare_child(struct task *task)
 {
+    KCLOSE(sigp[0]);
+    KCLOSE(sigp[1]);
+
+    signal(SIGINT,   SIG_DFL);
+    signal(SIGTERM,  SIG_DFL);
+    signal(SIGILL,   SIG_DFL);
+    signal(SIGSEGV,  SIG_DFL);
+    signal(SIGCHLD,  SIG_DFL);
+
+
     struct process *proc = task->pp_proc;
     KCLOSE(proc->startp[0]);
     fcntl(proc->startp[1], F_SETFD, fcntl(proc->startp[1], F_GETFD) | FD_CLOEXEC);
@@ -173,6 +179,7 @@ int process_exec(struct task *task)
 
     //ok, that didn't work.
     write(proc->startp[1], (char*)&errno, 1);
+    KCLOSE(proc->startp[1]);
     return 666;
 }
 

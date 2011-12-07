@@ -58,7 +58,7 @@ void dc_start_child(struct task *task)
     PLUGIN_RUN(r, exec, (task));
     // if we're here, no plugin could do an exec
     log_error("dc", "no plugin can start task %s", task->name);
-    exit (666);
+    exit(r);
 }
 
 int dc_start_parent(struct task *task)
@@ -90,7 +90,9 @@ int dc_start(struct task *task)
     }
     if (r) {
         log_error("dc", "task starting failed for %s", task->name);
-        task->running = 0;
+        task->running = 4;
+        dc_stop(task);
+
     }
     return r;
 }
