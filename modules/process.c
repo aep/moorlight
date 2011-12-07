@@ -11,7 +11,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
-#include "plugin.h"
+#include "main.h"
 #include "logger.h"
 
 
@@ -233,25 +233,4 @@ int process_activate(fd_set *rfds)
     }
     return 0;
 }
-
-#ifdef DYNAMIC_PLUGINS
-struct dc_plugin process_plugin =
-{
-    "process",
-    &process_init,
-    &process_teardown,
-    &process_register,
-    &process_unregister,
-    &process_prepare,
-    &process_prepare_child,
-    &process_prepare_parent,
-    &process_exec,
-    &process_stop,
-    &process_select,
-    &process_activate,
-    &process_register_group,
-    &process_unregister_group
-    0
-};
-#endif
 

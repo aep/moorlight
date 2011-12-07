@@ -1,4 +1,4 @@
-#include "plugin.h"
+#include "main.h"
 #include "logger.h"
 
 #include <fcntl.h>
@@ -284,10 +284,16 @@ int meubus_activate(fd_set *rfds)
                     task->name = strdup(name);
                     task->cmd =  strdup(cmd);
                     task->next = 0;
-                    dc_register(i, task);
 
                     const char *resp;
-                    if (dc_start(task) == 0) {
+                    if (dc_register(i, task)) {
+                        resp = "\e44\tregister failed\n";
+                        //FIXME: this is not safe. must find a way to call cleanup stuff
+                        //correctly when one plugin faulted in register.
+                        free (task->name);
+                        free (task->cmd);
+                        free (task);
+                    } else if (dc_start(task) == 0) {
                         resp = "started\n";
                     } else {
                         resp = "\e32\tunable to start\n";
@@ -369,23 +375,3 @@ int meubus_activate(fd_set *rfds)
 
     return 0;
 }
-
-#ifdef DYNAMIC_PLUGINS
-struct dc_plugin meubus_plugin =
-{
-    "meubus",
-    &meubus_init,
-    &meubus_teardown,
-    &meubus_prepare,
-    &meubus_prepare_child,
-    &meubus_prepare_parent,
-    &meubus_exec,
-    &meubus_stop,
-    &meubus_select,
-    &meubus_activate,
-    &meubus_register_group,
-    &meubus_register_ungroup,
-    0
-};
-#endif
-

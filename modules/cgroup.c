@@ -1,6 +1,5 @@
-#include "plugin.h"
+#include "main.h"
 #include "logger.h"
-
 
 int cgroup_init()
 {
@@ -12,7 +11,6 @@ int cgroup_teardown()
 {
     return 0;
 }
-
 
 int cgroup_register_group(struct task_group *group)
 {
@@ -60,29 +58,6 @@ int cgroup_stop(struct task *task)
     return 0;
 }
 
-
 int cgroup_exec(struct task *task) { return 0;}
 int cgroup_activate(fd_set *rfds) {return 0;}
 int cgroup_select(fd_set *rfds, int *maxfd) {return 0;}
-
-#ifdef DYNAMIC_PLUGINS
-struct dc_plugin cgroup_plugin =
-{
-    "cgroup",
-    &cgroup_init,
-    &cgroup_teardown,
-    &cgroup_register,
-    &cgroup_unregister,
-    &cgroup_prepare,
-    &cgroup_prepare_child,
-    &cgroup_prepare_parent,
-    &cgroup_exec,
-    &cgroup_stop,
-    &cgroup_select,
-    &cgroup_activate,
-    &cgroup_register_group,
-    &cgroup_unregister_group,
-    0
-};
-#endif
-

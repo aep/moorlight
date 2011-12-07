@@ -1,4 +1,4 @@
-#include "plugin.h"
+#include "main.h"
 #include "logger.h"
 
 #include <fcntl.h>
@@ -13,8 +13,6 @@
 
 #include <sys/types.h>
 #include <sys/wait.h>
-
-
 
 struct sysv_entry
 {
@@ -92,77 +90,3 @@ int sysv_teardown()
 {
     return 0;
 }
-int sysv_register(struct task *task)
-{
-    return 0;
-}
-int sysv_unregister(struct task *task)
-{
-    return 0;
-}
-int sysv_register_group(struct task_group *group)
-{
-    return 0;
-}
-
-int sysv_unregister_group(struct task_group *group)
-{
-    return 0;
-}
-
-int sysv_prepare(struct task *task)
-{
-    return 0;
-}
-
-int sysv_prepare_child(struct task *task)
-{
-    return 0;
-}
-
-int sysv_prepare_parent(struct task *task)
-{
-    return 0;
-}
-
-int sysv_stop(struct task *task)
-{
-    return 0;
-}
-
-int sysv_exec(struct task *task)
-{
-    return 0;
-}
-
-int sysv_select (fd_set *rfds, int *maxfd)
-{
-    return 0;
-}
-
-int sysv_activate(fd_set *rfds)
-{
-    return 0;
-}
-
-#ifdef DYNAMIC_PLUGINS
-struct dc_plugin sysv_plugin =
-{
-    "sysv",
-    &sysv_init,
-    &sysv_teardown,
-    &sysv_register,
-    &sysv_unregister,
-    &sysv_prepare,
-    &sysv_prepare_child,
-    &sysv_prepare_parent,
-    &sysv_exec,
-    &sysv_terminate,
-    &sysv_select,
-    &sysv_activate,
-    &sysv_register_group,
-    &sysv_unregister_group
-    0
-};
-#endif
-

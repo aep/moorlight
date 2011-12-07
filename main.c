@@ -13,49 +13,27 @@
 #include <assert.h>
 
 #include "logger.h"
-#include "plugins/plugin.h"
+#include "main.h"
 
-
-#if DYNAMIC_PLUGINS
-#define PLUGIN_RUN(r, fun, call) { \
-    struct dc_plugin *plugin = dc_plugins; \
-    while (plugin) { \
-        if (!plugin->fun) { \
-            plugin = plugin->next; \
-            continue; \
-        } \
-        r = (*plugin->fun)call; \
-        if (r != 0) \
-           break; \
-        plugin = plugin->next; \
-    } \
-} \
-
-#else
-#define PLUGIN_RUN(r, fun, call) \
-    if (iaminit)  sysv_ ## fun call; \
+#define MODULE_RUN(r, fun, call) \
     r = process_ ## fun call; \
     if (r == 0) \
     r = meubus_ ## fun call; \
     if (r == 0) \
     r = cgroup_ ## fun call; \
 
-#endif
-
-
-
 
 static int iaminit = 0;
 
-#ifdef DYNAMIC_PLUGINS
+#ifdef DYNAMIC_MODULES
 static struct dc_plugin *dc_plugins = 0;
 #endif
 
 void dc_start_child(struct task *task)
 {
     int r = 0;
-    PLUGIN_RUN(r, prepare_child, (task));
-    PLUGIN_RUN(r, exec, (task));
+    MODULE_RUN(r, prepare_child, (task));
+    MODULE_RUN(r, exec, (task));
     // if we're here, no plugin could do an exec
     log_error("dc", "no plugin can start task %s", task->name);
     exit(r);
@@ -64,7 +42,7 @@ void dc_start_child(struct task *task)
 int dc_start_parent(struct task *task)
 {
     int r = 0;
-    PLUGIN_RUN(r, prepare_parent, (task));
+    MODULE_RUN(r, prepare_parent, (task));
     return r;
 }
 
@@ -74,7 +52,7 @@ int dc_start(struct task *task)
     if (task->running != 0 )
         return 0;
     task->running = 1;
-    PLUGIN_RUN(r, prepare, (task));
+    MODULE_RUN(r, prepare, (task));
     if (r) {
         log_error("dc", "task prepare failed for %s", task->name);
         task->running = 0;
@@ -101,7 +79,7 @@ int dc_stop(struct task *task)
     int r = 0;
     if (task->running == 0 )
         return 0;
-    PLUGIN_RUN(r, stop, (task));
+    MODULE_RUN(r, stop, (task));
     task->running = 0;
     return 0;
 }
@@ -140,12 +118,20 @@ int dc_register_group(struct task_group *group)
     }
     task_groups = group;
     int r = 0;
-    PLUGIN_RUN(r, register_group, (group));
+    MODULE_RUN(r, register_group, (group));
     return 0;
 }
 
 int dc_register(struct task_group *group, struct task *task)
 {
+    for (struct task_group *i = task_groups; i ; i = i->next) {
+        for (struct task *j = i->tasks; j ; j = j->next) {
+            if (strcmp(task->name, j->name) == 0) {
+                log_error("dc", "task %s already registered in group %s", task->name, i->name);
+                return 3;
+            }
+        }
+    }
     task->group = group;
     if (group->tasks) {
         assert (group->tasks->prev == 0);
@@ -154,14 +140,14 @@ int dc_register(struct task_group *group, struct task *task)
     }
     group->tasks = task;
     int r = 0;
-    PLUGIN_RUN(r, register, (task));
+    MODULE_RUN(r, register, (task));
     return 0;
 }
 
 int dc_unregister(struct task_group *group, struct task *task)
 {
     int r = 0;
-    PLUGIN_RUN(r, unregister, (task));
+    MODULE_RUN(r, unregister, (task));
 
     if (task->prev)
         task->prev->next = task->next;
@@ -183,7 +169,7 @@ int dc_quit()
     running = 0;
 }
 
-#ifdef DYNAMIC_PLUGINS
+#ifdef DYNAMIC_MODULES
 extern struct dc_plugin process_plugin;
 extern struct dc_plugin cgroup_plugin;
 #endif
@@ -204,14 +190,15 @@ int main(int argc, char **argv)
     log_info("dc", "Moorlight 1 booting up");
 
 
-#ifdef DYNAMIC_PLUGINS
+#ifdef DYNAMIC_MODULES
     //TODO: not very dynamic...
     dc_plugins = &process_plugin;
     dc_plugins->next = &cgroup_plugin;
 #endif
 
     int r = 0;
-    PLUGIN_RUN(r, init, ());
+    if (iaminit) r = sysv_init();
+    MODULE_RUN(r, init, ());
 
 
     struct task_group *default_group = calloc(1,  sizeof(struct task_group));
@@ -232,7 +219,7 @@ int main(int argc, char **argv)
         fd_set rfds;
         FD_ZERO(&rfds);
         int maxfd = 0;
-        PLUGIN_RUN(r, select, (&rfds, &maxfd));
+        MODULE_RUN(r, select, (&rfds, &maxfd));
 
         int ret = 0;
         do {
@@ -245,7 +232,7 @@ int main(int argc, char **argv)
 
         log_debug("dc", "activated %i ", ret);
 
-        PLUGIN_RUN(r, activate, (&rfds));
+        MODULE_RUN(r, activate, (&rfds));
     }
 
     for (struct task_group *i = task_groups; i ; i = i->next)
@@ -258,10 +245,11 @@ int main(int argc, char **argv)
             dc_unregister(i, j);
         }
         int r = 0;
-        PLUGIN_RUN(r, unregister_group, (i));
+        MODULE_RUN(r, unregister_group, (i));
     }
 
-    PLUGIN_RUN(r, teardown, ());
+    MODULE_RUN(r, teardown, ());
+    if (iaminit) r = sysv_teardown();
 
 
     return 0;
